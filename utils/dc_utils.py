@@ -36,6 +36,8 @@ def read_video_frames(video_path, process_length, target_fps=-1, max_res=-1, pro
         if process_length != -1 and process_length < len(frames_idx):
             frames_idx = frames_idx[:process_length]
         frames = vid.get_batch(frames_idx).asnumpy()
+        if frames.shape[0] == 0:
+            raise RuntimeError("视频没有解出任何画面")
         if progress is not None:
             progress(len(frames_idx), len(frames_idx))
     else:
@@ -69,6 +71,8 @@ def read_video_frames(video_path, process_length, target_fps=-1, max_res=-1, pro
                 frames.append(frame)
             frame_count += 1
         cap.release()
+        if not frames:
+            raise RuntimeError("视频没有解出任何画面")
         frames = np.stack(frames, axis=0)
 
     return frames, fps
