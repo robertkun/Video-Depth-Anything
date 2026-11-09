@@ -16,7 +16,7 @@ except:
 def ensure_even(value):
     return value if value % 2 == 0 else value + 1
 
-def read_video_frames(video_path, process_length, target_fps=-1, max_res=-1):
+def read_video_frames(video_path, process_length, target_fps=-1, max_res=-1, progress=None):
     if DECORD_AVAILABLE:
         vid = VideoReader(video_path, ctx=cpu(0))
         original_height, original_width = vid.get_batch([0]).shape[1:3]
@@ -36,6 +36,8 @@ def read_video_frames(video_path, process_length, target_fps=-1, max_res=-1):
         if process_length != -1 and process_length < len(frames_idx):
             frames_idx = frames_idx[:process_length]
         frames = vid.get_batch(frames_idx).asnumpy()
+        if progress is not None:
+            progress(len(frames_idx), len(frames_idx))
     else:
         cap = cv2.VideoCapture(video_path)
         original_fps = cap.get(cv2.CAP_PROP_FPS)
@@ -44,12 +46,13 @@ def read_video_frames(video_path, process_length, target_fps=-1, max_res=-1):
 
         if max_res > 0 and max(original_height, original_width) > max_res:
             scale = max_res / max(original_height, original_width)
-            height = round(original_height * scale)
-            width = round(original_width * scale)
+            height = ensure_even(round(original_height * scale))
+            width = ensure_even(round(original_width * scale))
 
         fps = original_fps if target_fps < 0 else target_fps
 
         stride = max(round(original_fps / fps), 1)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
         frames = []
         frame_count = 0
@@ -57,6 +60,8 @@ def read_video_frames(video_path, process_length, target_fps=-1, max_res=-1):
             ret, frame = cap.read()
             if not ret or (process_length > 0 and frame_count >= process_length):
                 break
+            if progress is not None and total_frames > 0 and frame_count % 15 == 0:
+                progress(min(frame_count + 1, total_frames), total_frames)
             if frame_count % stride == 0:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Convert BGR to RGB
                 if max_res > 0 and max(original_height, original_width) > max_res:
@@ -69,8 +74,20 @@ def read_video_frames(video_path, process_length, target_fps=-1, max_res=-1):
     return frames, fps
 
 
-def save_video(frames, output_video_path, fps=10, is_depths=False, grayscale=False):
+def save_video(frames, output_video_path, fps=10, is_depths=False, grayscale=False, progress=None):
+    # libx264 的 yuv420p 要求宽高都是偶数，奇数尺寸会直接报 width/height not divisible by 2。
+    if frames.ndim == 3:
+        pad_h = int(frames.shape[1]) % 2
+        pad_w = int(frames.shape[2]) % 2
+        if pad_h or pad_w:
+            frames = np.pad(frames, ((0, 0), (0, pad_h), (0, pad_w)), mode="edge")
+    elif frames.ndim == 4:
+        pad_h = int(frames.shape[1]) % 2
+        pad_w = int(frames.shape[2]) % 2
+        if pad_h or pad_w:
+            frames = np.pad(frames, ((0, 0), (0, pad_h), (0, pad_w), (0, 0)), mode="edge")
     writer = imageio.get_writer(output_video_path, fps=fps, macro_block_size=1, codec='libx264', ffmpeg_params=['-crf', '18'])
+    total = int(frames.shape[0])
     if is_depths:
         colormap = np.array(cm.get_cmap("inferno").colors)
         d_min, d_max = frames.min(), frames.max()
@@ -79,8 +96,12 @@ def save_video(frames, output_video_path, fps=10, is_depths=False, grayscale=Fal
             depth_norm = ((depth - d_min) / (d_max - d_min) * 255).astype(np.uint8)
             depth_vis = (colormap[depth_norm] * 255).astype(np.uint8) if not grayscale else depth_norm
             writer.append_data(depth_vis)
+            if progress is not None and (i % 10 == 0 or i + 1 == total):
+                progress(i + 1, total)
     else:
         for i in range(frames.shape[0]):
             writer.append_data(frames[i])
+            if progress is not None and (i % 10 == 0 or i + 1 == total):
+                progress(i + 1, total)
 
     writer.close()

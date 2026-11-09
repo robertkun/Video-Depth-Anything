@@ -67,7 +67,7 @@ class VideoDepthAnything(nn.Module):
         depth = F.relu(depth)
         return depth.squeeze(1).unflatten(0, (B, T)) # return shape [B, T, H, W]
 
-    def infer_video_depth(self, frames, target_fps, input_size=518, device='cuda', fp32=False):
+    def infer_video_depth(self, frames, target_fps, input_size=518, device='cuda', fp32=False, progress=None):
         frame_height, frame_width = frames[0].shape[:2]
         ratio = max(frame_height, frame_width) / min(frame_height, frame_width)
         if ratio > 1.78:  # we recommend to process video with ratio smaller than 16:9 due to memory limitation
@@ -96,7 +96,8 @@ class VideoDepthAnything(nn.Module):
 
         depth_list = []
         pre_input = None
-        for frame_id in tqdm(range(0, org_video_len, frame_step)):
+        step_ids = list(range(0, org_video_len, frame_step))
+        for index, frame_id in enumerate(tqdm(step_ids, disable=progress is not None)):
             cur_list = []
             for i in range(INFER_LEN):
                 cur_list.append(torch.from_numpy(transform({'image': frame_list[frame_id+i].astype(np.float32) / 255.0})['image']).unsqueeze(0).unsqueeze(0))
@@ -113,6 +114,8 @@ class VideoDepthAnything(nn.Module):
             depth_list += [depth[i][0].cpu().numpy() for i in range(depth.shape[0])]
 
             pre_input = cur_input
+            if progress is not None:
+                progress(index + 1, len(step_ids))
 
         del frame_list
         gc.collect()
